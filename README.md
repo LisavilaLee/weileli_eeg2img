@@ -1,11 +1,10 @@
 <!-- # A Pipeline for EEG to Image Reconstruction -->
 <h1 style="border-bottom: 1px solid lightgray; margin-bottom: 5px;">A Pipeline for EEG to Image Reconstruction</h1>
 
-<!-- ## TODO -->
-<h2 style="border-bottom: 1px solid lightgray; margin-bottom: 5px;">TODO</h2>
+## TODO
 - [ ] Dataset for EEG & Image
-- [ ] Train Loop
-- [ ] ...
+
+
 
 <!-- ## Acknowledge -->
 <h2 style="border-bottom: 1px solid lightgray; margin-bottom: 5px;">Acknowledge</h2>
