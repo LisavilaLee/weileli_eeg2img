@@ -1,0 +1,8 @@
+{
+    "data_path": "/userhome2/liweile/EEG_Image_decode/THINGS/Preprocessed_data_250Hz",
+    "img_directory_training": "/userhome2/liweile/EEG_Image_decode/THINGS/images_set/training_images",
+    
+    "img_directory_test": "/userhome2/liweile/EEG_Image_decode/THINGS/images_set/test_images",
+    "features_path":"/userhome2/liweile/EEG_Image_decode/THINGS/CLIP"
+}
+

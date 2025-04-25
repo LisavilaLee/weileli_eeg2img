@@ -4,8 +4,6 @@
 ## TODO
 - [ ] Dataset for EEG & Image
 
-
-
 <!-- ## Acknowledge -->
 <h2 style="border-bottom: 1px solid lightgray; margin-bottom: 5px;">Acknowledge</h2>
 
