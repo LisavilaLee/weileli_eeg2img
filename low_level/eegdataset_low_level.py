@@ -1,4 +1,7 @@
 import torch
+from diffusers import DiffusionPipeline
+from diffusers.pipelines.deprecated.stable_diffusion_variants.pipeline_stable_diffusion_inpaint_legacy import \
+    preprocess_image
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import os
@@ -13,38 +16,35 @@ import datetime
 from tqdm import tqdm
 
 from args_low_level import get_parser
-
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com/"
-cuda_device_count = torch.cuda.device_count()
-print(cuda_device_count)
-
-parser = get_parser()
-args = parser.parse_args()
-
-device = args.gpu if torch.cuda.is_available() else "cpu"
+from utils import hf_mirror_download
 
 import clip
-
-vlmodel, preprocess = clip.load("ViT-B/32", device=device)  # /userhome2/liweile/.cache/clip
-model_type = 'ViT-H-14'
 import open_clip
-
-vlmodel, preprocess_train, feature_extractor = open_clip.create_model_and_transforms(
-    model_type, pretrained="/userhome2/liweile/EEG_Image_decode/Generation/open-clip-vit-h-14/open_clip_model.safetensors",
-    precision='fp32', device=device)
 
 import json
 
 # Load the configuration from the JSON file
 config_path = "data_config.json"
+
 with open(config_path, "r") as config_file:
     config = json.load(config_file)
 
 # Access the paths from the config
+root_dir = config["root_dir"]
 data_path = config["data_path"]
 features_path = config["features_path"]
 img_directory_training = config["img_directory_training"]
 img_directory_test = config["img_directory_test"]
+
+OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
+OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
+
+
+preprocess_train = transforms.Compose([
+        transforms.Resize(512),
+        transforms.ToTensor(),
+        transforms.Normalize(OPENAI_DATASET_MEAN, OPENAI_DATASET_STD)
+])
 
 
 class EEGDataset():
@@ -53,7 +53,7 @@ class EEGDataset():
     """
 
     def __init__(self, data_path, exclude_subject=None, subjects=None, train=True, time_window=[0, 1.0], classes=None,
-                 pictures=None, val_size=None):
+                 pictures=None, val_size=None, device='cpu'):
         self.data_path = data_path
         self.train = train
         self.subject_list = os.listdir(data_path)
@@ -65,6 +65,7 @@ class EEGDataset():
         self.pictures = pictures
         self.exclude_subject = exclude_subject
         self.val_size = val_size
+        self.device = device
 
         # assert any subjects in subject_list
         assert any(sub in self.subject_list for sub in self.subjects)
@@ -75,24 +76,49 @@ class EEGDataset():
 
         print(f"{[datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')]}: EEGDataset load & extract data done.")
 
-        if self.classes is None and self.pictures is None:
-            features_filename = os.path.join('variables',
-                                             f'train_image_latent_512.pt') if self.train else os.path.join(
-                'variables', f'test_image_latent_512.pt')
+        """
+            pipe = DiffusionPipeline.from_pretrained("stabilityai/sdxl-turbo", 
+            torch_dtype=torch.float, variant="fp16")
+            vlmodel = pipe.vae
+            
+            posterior = vlmodel.encode(low_level_image).latent_dist
+        """
 
-            if os.path.exists(features_filename):
-                print(
-                    f"{[datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')]}: Exist features file {features_filename}.")
-                saved_features = torch.load(features_filename, weights_only=True)
-                print(f"saved_features: {saved_features.keys()}")
-                self.text_features = None
-                self.img_features = saved_features['image_latent']
-                # print(f"img_features shape: {self.img_features.shape}")
-            else:
-                print("Error")
-        else:
-            self.text_features = self.Textencoder(self.text)
-            self.img_features = self.ImageEncoder(self.img)
+        # sdxl_tubo_weight_path = hf_mirror_download(repo_id="stabilityai/sdxl-turbo", local_dir=os.path.join(root_dir, "huggingface"))
+        sdxl_tubo_weight_path = "/userhome2/liweile/EEG_Image_decode/sdxl_turbo/"
+        pipe = DiffusionPipeline.from_pretrained(sdxl_tubo_weight_path, torch_dtype=torch.float, variant="fp16")
+        self.vlmodel = pipe.vae.to(self.device)
+
+        vae_custom_features_filename = "/userhome2/liweile/weileli_eeg2img/features_data/train_image_vae_512.pt"
+        self.img_features = self.ImageEncoder(self.img)
+
+        torch.save({'image_latent': self.img_features.cpu(),}, vae_custom_features_filename)
+
+        features_filename = os.path.join(f"/userhome2/liweile/EEG_Image_decode/Generation", 'variables',
+                                         f'train_image_latent_512.pt')
+        saved_features = torch.load(features_filename, weights_only=True)
+        print(f"saved_features: {saved_features.keys()}")
+        self.saved_img_features = saved_features['image_latent']
+        print(f"saved_img_features.shape {self.saved_img_features.shape}")
+
+        # if self.classes is None and self.pictures is None:
+        #     features_filename = os.path.join('variables',
+        #                                      f'train_image_latent_512.pt') if self.train else os.path.join(
+        #         'variables', f'test_image_latent_512.pt')
+        #
+        #     if os.path.exists(features_filename):
+        #         print(
+        #             f"{[datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')]}: Exist features file {features_filename}.")
+        #         saved_features = torch.load(features_filename, weights_only=True)
+        #         print(f"saved_features: {saved_features.keys()}")
+        #         self.text_features = None
+        #         self.img_features = saved_features['image_latent']
+        #         # print(f"img_features shape: {self.img_features.shape}")
+        #     else:
+        #         print("Error")
+        # else:
+        #     self.text_features = self.Textencoder(self.text)
+        #     self.img_features = self.ImageEncoder(self.img)
 
         print(f"{[datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')]}: Text features and image features done.")
 
@@ -294,10 +320,10 @@ class EEGDataset():
         return extracted_data
 
     def Textencoder(self, text):
-        text_inputs = torch.cat([clip.tokenize(t) for t in text]).to(device)
+        text_inputs = torch.cat([clip.tokenize(t) for t in text]).to(self.device)
 
         with torch.no_grad():
-            text_features = vlmodel.encode_text(text_inputs)
+            text_features = self.vlmodel.encode_text(text_inputs)
 
         text_features = F.normalize(text_features, dim=-1).detach()
 
@@ -314,10 +340,10 @@ class EEGDataset():
         for i in tqdm(range(0, len(images), batch_size), desc="Encoding images"):
             batch_images = images[i:i + batch_size]
             image_inputs = torch.stack([preprocess_train(Image.open(img).convert("RGB")) for img in batch_images]).to(
-                device)
+                self.device)
 
             with torch.no_grad():
-                batch_image_features = vlmodel.encode_image(image_inputs)
+                batch_image_features = self.vlmodel.encode(image_inputs).latent_dist.mode()
                 # batch_image_features /= batch_image_features.norm(dim=-1, keepdim=True)
 
             image_features_list.append(batch_image_features)
@@ -385,8 +411,8 @@ if __name__ == "__main__":
     # Instantiate the dataset and dataloader
     # data_path = "/home/ldy/Workspace/THINGS/EEG/osfstorage-archive"  # Replace with the path to your data
     data_path = data_path
-    train_dataset = EEGDataset(data_path, subjects=['sub-01'], train=True)
-    test_dataset = EEGDataset(data_path, subjects=['sub-01'], train=False)
+    train_dataset = EEGDataset(data_path, subjects=['sub-01'], train=True, device="cuda:5")
+    # test_dataset = EEGDataset(data_path, subjects=['sub-01'], train=False)
     # train_dataset = EEGDataset(data_path, exclude_subject = 'sub-01', train=True)
     # test_dataset = EEGDataset(data_path, exclude_subject = 'sub-01', train=False)
     # train_dataset = EEGDataset(data_path, train=True)
@@ -396,13 +422,13 @@ if __name__ == "__main__":
     # 1秒 'times': array([-0.2 , -0.19, -0.18, ... , 0.76,  0.77,  0.78, 0.79])}
     # 17个通道'ch_names': ['Pz', 'P3', 'P7', 'O1', 'Oz', 'O2', 'P4', 'P8', 'P1', 'P5', 'PO7', 'PO3', 'POz', 'PO4', 'PO8', 'P6', 'P2']
     # 100 Hz
-    train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
-
-    i = 80 * 1 - 1
-    x, label, text, text_features, img, img_features = test_dataset[i]
-    print(f"Index {i}, Label: {label}, text: {text}")
-    Image.open(img)
+    # train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
+    # test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True)
+    #
+    # i = 80 * 1 - 1
+    # x, label, text, text_features, img, img_features = test_dataset[i]
+    # print(f"Index {i}, Label: {label}, text: {text}")
+    # Image.open(img)
 
 
 
