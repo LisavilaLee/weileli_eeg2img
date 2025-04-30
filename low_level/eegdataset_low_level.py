@@ -1,33 +1,22 @@
-import torch
 from diffusers import DiffusionPipeline
 import numpy as np
-from torchvision import transforms
 from PIL import Image
-
-import os
-import utils
 from tqdm import tqdm
+import os
 
-from utils import get_json, hf_mirror_download, get_current_time
-
-OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
-OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
-
-
-preprocess_train = transforms.Compose([
-        transforms.Resize(512),
-        transforms.ToTensor(),
-        transforms.Normalize(OPENAI_DATASET_MEAN, OPENAI_DATASET_STD)
-])
+from torch.utils.data import DataLoader
+from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import *
+from utils import get_current_time, get_json, hf_mirror_download
 
 
-class EEGDataset():
+
+class EEGDataset:
     """
     subjects = ['sub-01', 'sub-02', 'sub-05', 'sub-04', 'sub-03', 'sub-06', 'sub-07', 'sub-08', 'sub-09', 'sub-10']
     """
 
     def __init__(self, exclude_subject=None, subjects=None, train=True, time_window=[0, 1.0], classes=None,
-                 pictures=None, val_size=None, pipe=None, device='cpu'):
+                 pictures=None, val_size=None, pipe=None, image_processor=None, device='cpu'):
         self.root_dir, self.data_path, self.img_directory_training, self.img_directory_test, self.huggingface_repo_path= get_json()
         self.train = train
         self.subject_list = os.listdir(self.data_path)
@@ -39,6 +28,8 @@ class EEGDataset():
         self.pictures = pictures
         self.exclude_subject = exclude_subject
         self.val_size = val_size
+        self.pipe = pipe
+        self.preprocess_train = image_processor.preprocess
         self.device = device
 
         # assert any subjects in subject_list
@@ -48,12 +39,12 @@ class EEGDataset():
 
         self.data = self.extract_eeg(self.data, time_window)
 
-        if pipe is None:
+        if self.pipe is None:
             try:
                 print("Pipe not detected. Starting download of SDXL-Turbo model...")
                 sdxl_path = hf_mirror_download("stabilityai/sdxl-turbo", self.huggingface_repo_path)
 
-                pipe = DiffusionPipeline.from_pretrained(
+                self.pipe = DiffusionPipeline.from_pretrained(
                     sdxl_path,
                     torch_dtype=torch.float,
                     variant="fp16"
@@ -61,19 +52,22 @@ class EEGDataset():
             except Exception as e:
                 print("Failed to load the model:", e)
                 raise RuntimeError("EEGDataset is unable to initialize the SDXL-Turbo diffusion pipeline.") from e
-        self.vlmodel = pipe.vae.to(self.device)
+        self.vlmodel = self.pipe.vae.to(self.device)
 
-        features_filename = os.path.join(self.root_dir, 'features_data/train_image_vae_512.pt') if self.train else os.path.join(
-            self.root_dir, 'features_data/test_image_vae_512.pt')
+        features_filename = os.path.join(self.root_dir, 'features_data/train_image_vae.pt') if self.train else os.path.join(
+            self.root_dir, 'features_data/test_image_vae.pt')
 
         if os.path.exists(features_filename):
             print(
                 f"{[get_current_time()]}: Exist VAE image latent features file {features_filename}.")
-            saved_features = torch.load(features_filename, weights_only=True)
-            self.img_features = saved_features['image_latent']
+            saved_features = torch.load(features_filename, map_location='cpu', weights_only=True)
+            self.img_features = saved_features['image_latent'].to(self.device)
         else:
             self.img_features = self.ImageEncoder(self.img)     # shape: (16540, 4, 64, 64)
             torch.save({'image_latent': self.img_features}, features_filename)
+
+    def get_vlmodel(self):
+        return self.vlmodel
 
     def load_data(self):
         data_list = []
@@ -215,8 +209,7 @@ class EEGDataset():
 
         for i in tqdm(range(0, len(images), batch_size), desc="Encoding images"):
             batch_images = images[i:i + batch_size]
-            image_inputs = torch.stack([preprocess_train(Image.open(img).convert("RGB")) for img in batch_images]).to(
-                self.device)
+            image_inputs = (self.preprocess_train([Image.open(img).convert("RGB") for img in batch_images]).to(self.device))
 
             with torch.no_grad():
                 batch_image_features = self.vlmodel.encode(image_inputs).latent_dist.mode()
@@ -282,4 +275,38 @@ class EEGDataset():
 
 
 if __name__ == "__main__":
-    train_dataset = EEGDataset(subjects=['sub-01'], train=False, device="cuda:1")
+    # 测试ImageEncoder的代码
+
+    device = "cuda:3"
+    huggingface_repo_path = "/userhome2/liweile/weileli_eeg2img/huggingface/"
+
+    # VAE
+    image_processor = VaeImageProcessor()
+
+    sdxl_path = hf_mirror_download("stabilityai/sdxl-turbo", huggingface_repo_path)
+    pipe = DiffusionPipeline.from_pretrained(sdxl_path, torch_dtype=torch.float, variant="fp16")
+
+
+    if hasattr(pipe, 'vae'):
+        for param in pipe.vae.parameters():
+            param.requires_grad = False
+
+    vae = pipe.vae.to(device)
+    vae.requires_grad_(False)
+    vae.eval()
+
+    test_dataset = EEGDataset(subjects=['sub-01'], train=False, pipe=pipe, image_processor=image_processor, device=device)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=True, num_workers=0, drop_last=True)
+
+    save_dir = "eegdataset_tmp_test_img"
+
+    for batch_idx, (eeg_data, labels, _, _, img, img_features) in enumerate(test_loader):
+        labels = labels.to(device)
+        img_features = img_features.to(device).float()
+        x_test = vae.decode(img_features).sample
+        image_test = image_processor.postprocess(x_test, output_type='pil')
+        for i, label in enumerate(labels.tolist()):
+            save_path = os.path.join(save_dir, f"test_image_{label + 1}.png")
+            if not os.path.isfile(save_path):
+                os.makedirs(save_dir, exist_ok=True)
+            image_test[i].save(save_path)

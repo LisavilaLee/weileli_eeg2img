@@ -237,11 +237,11 @@ def main():
         optimizer = torch.optim.AdamW(itertools.chain(eeg_model.parameters(), img_model.parameters()), lr=args.lr)
 
         if args.insubject:
-            train_dataset = EEGDataset(subjects=[sub], train=True, pipe=pipe, device=device)
-            test_dataset = EEGDataset(subjects=[sub], train=False, pipe=pipe, device=device)
+            train_dataset = EEGDataset(subjects=[sub], train=True, pipe=pipe, image_processor=image_processor, device=device)
+            test_dataset = EEGDataset(subjects=[sub], train=False, pipe=pipe,image_processor=image_processor,  device=device)
         else:
-            train_dataset = EEGDataset(exclude_subject=sub, train=True, pipe=pipe, device=device)
-            test_dataset = EEGDataset(exclude_subject=sub, train=False, pipe=pipe, device=device)
+            train_dataset = EEGDataset(exclude_subject=sub, train=True, pipe=pipe, image_processor=image_processor, device=device)
+            test_dataset = EEGDataset(exclude_subject=sub, train=False, pipe=pipe, image_processor=image_processor, device=device)
 
         train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=0,
                                   drop_last=True)
@@ -252,7 +252,7 @@ def main():
 
         results = main_train_loop(sub, eeg_model, img_model, train_loader, test_loader, optimizer, device,
                                   img_features_train_all, img_features_test_all, config=args, vae=vae,
-                                  image_preocessor=image_processor, current_time=current_time, logger=args.logger)
+                                  current_time=current_time, image_preocessor=image_processor, logger=args.logger)
 
         # Save results to a CSV file
         results_dir = os.path.join(args.output_dir, args.encoder_type, sub, current_time)
