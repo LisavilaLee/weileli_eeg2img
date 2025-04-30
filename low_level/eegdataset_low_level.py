@@ -54,20 +54,19 @@ class EEGDataset:
                 raise RuntimeError("EEGDataset is unable to initialize the SDXL-Turbo diffusion pipeline.") from e
         self.vlmodel = self.pipe.vae.to(self.device)
 
-        features_filename = os.path.join(self.root_dir, 'features_data/train_image_vae.pt') if self.train else os.path.join(
-            self.root_dir, 'features_data/test_image_vae.pt')
+        features_filename = os.path.join(self.root_dir, 'features_data/train_image_latent_512.pt') if self.train else os.path.join(
+            self.root_dir, 'features_data/test_image_latent_512.pt')
 
         if os.path.exists(features_filename):
             print(
                 f"{[get_current_time()]}: Exist VAE image latent features file {features_filename}.")
             saved_features = torch.load(features_filename, map_location='cpu', weights_only=True)
             self.img_features = saved_features['image_latent'].to(self.device)
+            print(f"img_features: {self.img_features.size()}")
         else:
             self.img_features = self.ImageEncoder(self.img)     # shape: (16540, 4, 64, 64)
+            print(f"img_features: {self.img_features.size()}")
             torch.save({'image_latent': self.img_features}, features_filename)
-
-    def get_vlmodel(self):
-        return self.vlmodel
 
     def load_data(self):
         data_list = []
@@ -209,7 +208,7 @@ class EEGDataset:
 
         for i in tqdm(range(0, len(images), batch_size), desc="Encoding images"):
             batch_images = images[i:i + batch_size]
-            image_inputs = (self.preprocess_train([Image.open(img).convert("RGB") for img in batch_images]).to(self.device))
+            image_inputs = (self.preprocess_train([Image.open(img).convert("RGB") for img in batch_images], height=512, width=512).to(self.device))
 
             with torch.no_grad():
                 batch_image_features = self.vlmodel.encode(image_inputs).latent_dist.mode()
