@@ -1,25 +1,3 @@
-import os
-import argparse
-from args_low_level import get_parser
-
-os.environ["HF_ENDPOINT"] = "https://hf-mirror.com/"
-
-import tqdm
-from eegdataset_low_level import EEGDataset
-from einops.layers.torch import Rearrange, Reduce
-
-from sklearn.metrics import confusion_matrix
-from torch.utils.data import DataLoader, Dataset
-import random
-# from util import wandb_logger
-
-from diffusers.pipelines.stable_diffusion_xl.pipeline_stable_diffusion_xl import *
-import torch.optim.lr_scheduler as lr_scheduler
-import datetime
-import itertools
-import csv
-
-import torch
 import torch.nn as nn
 
 

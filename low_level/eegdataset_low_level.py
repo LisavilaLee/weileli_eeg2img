@@ -1,39 +1,14 @@
 import torch
 from diffusers import DiffusionPipeline
-from diffusers.pipelines.deprecated.stable_diffusion_variants.pipeline_stable_diffusion_inpaint_legacy import \
-    preprocess_image
-from torch.utils.data import Dataset, DataLoader
 import numpy as np
-import os
-from torch.nn import functional as F
-import torch.nn as nn
 from torchvision import transforms
 from PIL import Image
-import requests
 
 import os
 import utils
 from tqdm import tqdm
 
-from args_low_level import get_parser
-
-import clip
-import open_clip
-
-import json
-
-# Load the configuration from the JSON file
-config_path = "data_config.json"
-
-with open(config_path, "r") as config_file:
-    config = json.load(config_file)
-
-# Access the paths from the config
-root_dir = config["root_dir"]
-data_path = config["data_path"]
-features_path = config["features_path"]
-img_directory_training = config["img_directory_training"]
-img_directory_test = config["img_directory_test"]
+from utils import get_json, hf_mirror_download, get_current_time
 
 OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
 OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
@@ -51,11 +26,11 @@ class EEGDataset():
     subjects = ['sub-01', 'sub-02', 'sub-05', 'sub-04', 'sub-03', 'sub-06', 'sub-07', 'sub-08', 'sub-09', 'sub-10']
     """
 
-    def __init__(self, data_path, exclude_subject=None, subjects=None, train=True, time_window=[0, 1.0], classes=None,
-                 pictures=None, val_size=None, device='cpu'):
-        self.data_path = data_path
+    def __init__(self, exclude_subject=None, subjects=None, train=True, time_window=[0, 1.0], classes=None,
+                 pictures=None, val_size=None, pipe=None, device='cpu'):
+        self.root_dir, self.data_path, self.img_directory_training, self.img_directory_test, self.huggingface_repo_path= get_json()
         self.train = train
-        self.subject_list = os.listdir(data_path)
+        self.subject_list = os.listdir(self.data_path)
         self.subjects = self.subject_list if subjects is None else subjects
         self.n_sub = len(self.subjects)
         self.time_window = time_window
@@ -73,17 +48,27 @@ class EEGDataset():
 
         self.data = self.extract_eeg(self.data, time_window)
 
-        # sdxl_tubo_weight_path = hf_mirror_download(repo_id="stabilityai/sdxl-turbo", local_dir=os.path.join(root_dir, "huggingface"))
-        sdxl_tubo_weight_path = "/userhome2/liweile/EEG_Image_decode/sdxl_turbo/"
-        pipe = DiffusionPipeline.from_pretrained(sdxl_tubo_weight_path, torch_dtype=torch.float, variant="fp16")
+        if pipe is None:
+            try:
+                print("Pipe not detected. Starting download of SDXL-Turbo model...")
+                sdxl_path = hf_mirror_download("stabilityai/sdxl-turbo", self.huggingface_repo_path)
+
+                pipe = DiffusionPipeline.from_pretrained(
+                    sdxl_path,
+                    torch_dtype=torch.float,
+                    variant="fp16"
+                )
+            except Exception as e:
+                print("Failed to load the model:", e)
+                raise RuntimeError("EEGDataset is unable to initialize the SDXL-Turbo diffusion pipeline.") from e
         self.vlmodel = pipe.vae.to(self.device)
 
-        features_filename = os.path.join(root_dir, 'features_data/train_image_vae_512.pt') if self.train else os.path.join(
-            root_dir, 'features_data/test_image_vae_512.pt')
+        features_filename = os.path.join(self.root_dir, 'features_data/train_image_vae_512.pt') if self.train else os.path.join(
+            self.root_dir, 'features_data/test_image_vae_512.pt')
 
         if os.path.exists(features_filename):
             print(
-                f"{[utils.print_current_time()]}: Exist VAE image latent features file {features_filename}.")
+                f"{[get_current_time()]}: Exist VAE image latent features file {features_filename}.")
             saved_features = torch.load(features_filename, weights_only=True)
             self.img_features = saved_features['image_latent']
         else:
@@ -97,15 +82,12 @@ class EEGDataset():
         images = []
 
         if self.train:
-            directory = img_directory_training
+            directory = self.img_directory_training
         else:
-            directory = img_directory_test
+            directory = self.img_directory_test
 
         dirnames = [d for d in os.listdir(directory) if os.path.isdir(os.path.join(directory, d))]
         dirnames.sort()
-
-        if self.classes is not None:
-            dirnames = [dirnames[i] for i in self.classes]
 
         for dir in dirnames:
 
@@ -120,9 +102,9 @@ class EEGDataset():
             texts.append(new_description)
 
         if self.train:
-            img_directory = img_directory_training
+            img_directory = self.img_directory_training
         else:
-            img_directory = img_directory_test
+            img_directory = self.img_directory_test
 
         all_folders = [d for d in os.listdir(img_directory) if os.path.isdir(os.path.join(img_directory, d))]
         all_folders.sort()
@@ -146,7 +128,7 @@ class EEGDataset():
 
                 preprocessed_eeg_data = torch.from_numpy(data['preprocessed_eeg_data']).float().detach()
                 # shape of data['times']: (300, ). In preprocessing_utils.py, sampling time range is [-0.2, 1.0]
-                times = torch.from_numpy(data['times']).detach()[50:]   # times: (0.0s, 0.996s, step=0.004)
+                times = torch.from_numpy(data['times']).detach()[50:]   # times: (st=0.0s, ed=0.996s, step=0.004)
                 ch_names = data['ch_names']
 
                 n_classes = 1654
@@ -154,7 +136,7 @@ class EEGDataset():
 
                 for i in range(n_classes):
                     start_index = i * samples_per_class
-                    # preprocessing_eeg_data在数据集官方文件中已说明按照字母序类别和类别对应图片名称顺序排序完毕。
+                    # preprocessing_eeg_data 在数据集官方文件中已说明按照字母序类别和类别对应图片名称顺序排序完毕。
                     preprocessed_eeg_data_class = preprocessed_eeg_data[
                                                   start_index: start_index + samples_per_class]
                     labels = torch.full((samples_per_class,), i, dtype=torch.long).detach()
@@ -187,7 +169,7 @@ class EEGDataset():
                     continue
 
         if self.train:
-            # data_list: list[1654->tensor([10, 4, 63, 250])]
+            # data_list: list[1654] -> tensor([10, 4, 63, 250])
             # -1：自动推导出第一个维度（这里就是 16540 × 4 = 66160）；
             # *data_list[0].shape[2:] → 即 (63, 250)：表示只保留 通道数和时间点；
             data_tensor = torch.cat(data_list, dim=0).view(-1, *data_list[0].shape[2:])  # [1654x4x10=66160, 63, 250]
@@ -227,7 +209,7 @@ class EEGDataset():
 
     def ImageEncoder(self, images):
         print(
-            f"{[utils.print_current_time()]}: Image VAE latent features encoder Begin.")
+            f"{[get_current_time()]}: Image VAE latent features encoder Begin.")
         batch_size = 20
         image_features_list = []
 
@@ -300,5 +282,4 @@ class EEGDataset():
 
 
 if __name__ == "__main__":
-    data_path = data_path
-    train_dataset = EEGDataset(data_path, subjects=['sub-01'], train=False, device="cuda:1")
+    train_dataset = EEGDataset(subjects=['sub-01'], train=False, device="cuda:1")
