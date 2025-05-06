@@ -29,10 +29,10 @@ class Proj_img(nn.Sequential):
         return x
 
 
-class encoder_low_level(nn.Module):
+class ATMS_low_level(nn.Module):
     def __init__(self, num_channels=63, sequence_length=250, num_subjects=1, num_features=64, num_latents=1024,
                  num_blocks=1):
-        super(encoder_low_level, self).__init__()
+        super(ATMS_low_level, self).__init__()
         self.subject_wise_linear = nn.ModuleList([nn.Linear(sequence_length, 128) for _ in range(num_subjects)])
 
         # CNN upsampler

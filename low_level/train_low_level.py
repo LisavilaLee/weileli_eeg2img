@@ -14,7 +14,7 @@ import torch.optim.lr_scheduler as lr_scheduler
 import itertools
 import csv
 
-from model_low_level import Proj_img, encoder_low_level
+from models import ATMS_low_level
 from utils import get_current_time, get_json, hf_mirror_download, wandb_logger
 
 
@@ -139,12 +139,12 @@ def main_train_loop(sub, eeg_model, img_model, train_dataloader, test_dataloader
         if (epoch + 1) % 5 == 0:
             # Get the current time and format it as a string (e.g., '2024-01-17_15-30-00')
             if config.insubject == True:
-                os.makedirs(f"./models/contrast/{config.encoder_type}/{sub}/{current_time}", exist_ok=True)
-                file_path = f"./models/contrast/{config.encoder_type}/{sub}/{current_time}/{epoch + 1}.pth"
+                os.makedirs(f"./outputs/contrast/{config.encoder_type}/{sub}/{current_time}", exist_ok=True)
+                file_path = f"./outputs/contrast/{config.encoder_type}/{sub}/{current_time}/{epoch + 1}.pth"
                 torch.save(eeg_model.state_dict(), file_path)
             else:
-                os.makedirs(f"./models/contrast/across/{config.encoder_type}/{current_time}", exist_ok=True)
-                file_path = f"./models/contrast/across/{config.encoder_type}/{current_time}/{epoch + 1}.pth"
+                os.makedirs(f"./outputs/contrast/across/{config.encoder_type}/{current_time}", exist_ok=True)
+                file_path = f"./outputs/contrast/across/{config.encoder_type}/{current_time}/{epoch + 1}.pth"
                 torch.save(eeg_model.state_dict(), file_path)
             print(f"{[get_current_time()]}: model saved in {file_path}!")
         train_losses.append(train_loss)

@@ -10,8 +10,8 @@ def get_parser():
     parser.add_argument('--epochs', type=int, default=200, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
     parser.add_argument('--insubject', default=True, help='Flag to indicate within-subject training')
-    parser.add_argument('--encoder_type', type=str, default='encoder_low_level',
-                        choices=['encoder_low_level'], help='Encoder type')
+    parser.add_argument('--encoder_type', type=str, default='ATMS_low_level',
+                        choices=['ATMS_low_level'], help='Encoder type')
     parser.add_argument('--img_encoder', type=str, default='Proj_img', help='Image encoder type')
     parser.add_argument('--logger', default=True, help='Enable logging')
     parser.add_argument('--gpu', type=str, default='cuda:1', help='GPU device to use')
